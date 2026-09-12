@@ -3,6 +3,7 @@
 API REST em ASP.NET Core para acompanhamento preventivo da saúde de pets. A Olli conecta tutor, pet e clínica veterinária por meio de cadastro, histórico clínico, alertas preventivos e uma recomendação simulada de IA.
 
 **Repositório:** <https://github.com/Olli-Pet/challenge_clyvo_dotnet.git>
+**Branch:** Importar-projeto (Pull request com comparação entre projeto da Sprint 2 com Sprint 3)
 
 ## Integrantes
 
