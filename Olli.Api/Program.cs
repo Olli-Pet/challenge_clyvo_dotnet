@@ -8,11 +8,39 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
-using Olli.Api;
-using Olli.Api.Endpoints;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+using Olli.Api.Application.Services;
+using Olli.Api.Infrastructure.Observability;
+using Olli.Api.Infrastructure.Persistence;
 using Scalar.AspNetCore;
+using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, _, loggerConfiguration) => loggerConfiguration
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "Olli.Api")
+    .WriteTo.Console(outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}")
+    .WriteTo.File(
+        Path.Combine(context.HostingEnvironment.ContentRootPath, "logs", "olli-.log"),
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14,
+        shared: true));
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(Telemetry.ActivitySourceName)
+        .AddConsoleExporter())
+    .WithMetrics(metrics => metrics
+        .AddMeter(Telemetry.MeterName)
+        .AddConsoleExporter());
+
+builder.Services.AddControllers();
 
 #region Database
 var databaseProvider = builder.Configuration.GetValue<string>("DatabaseProvider") ?? "InMemory";
@@ -44,9 +72,12 @@ builder.Services.AddDbContext<OlliDb>(
             return;
         }
 
-        options.UseInMemoryDatabase("OlliDb");
+        var databaseName = builder.Configuration.GetValue<string>("DatabaseName") ?? "OlliDb";
+        options.UseInMemoryDatabase(databaseName);
     });
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+builder.Services.AddScoped<ITutorService, TutorService>();
+builder.Services.AddScoped<IPetService, PetService>();
 #endregion
 
 #region Idempotency
@@ -83,21 +114,58 @@ builder.Services.AddRateLimiter(options =>
 
 var healthChecks = builder.Services.AddHealthChecks();
 
+healthChecks.AddCheck(
+    "api",
+    () => HealthCheckResult.Healthy("API Olli em execucao."),
+    tags: ["live", "ready"]);
+
 if (isOracleProvider)
 {
     healthChecks.AddOracle(
         connectionString: oracleConnectionString!,
         name: "oracle-fiap",
         failureStatus: HealthStatus.Degraded,
-        tags: ["Db", "Oracle"],
+        tags: ["ready", "db", "oracle"],
         healthQuery: "SELECT 1 FROM DUAL",
-        timeout: TimeSpan.FromSeconds(300)
+        timeout: TimeSpan.FromSeconds(5)
     );
 }
 else
 {
-    healthChecks.AddCheck("in-memory-db", () =>
-        HealthCheckResult.Healthy("Banco em memoria ativo para desenvolvimento local."));
+    healthChecks.AddCheck(
+        "in-memory-db",
+        () => HealthCheckResult.Healthy("Banco em memoria ativo para desenvolvimento local."),
+        tags: ["ready", "db", "in-memory"]);
+}
+
+var externalServices = builder.Configuration
+    .GetSection("ExternalServices:Urls")
+    .GetChildren()
+    .Where(section => Uri.TryCreate(section.Value, UriKind.Absolute, out _))
+    .ToList();
+
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    externalServices.Clear();
+}
+
+if (externalServices.Count == 0)
+{
+    healthChecks.AddCheck(
+        "external-services",
+        () => HealthCheckResult.Healthy("Nenhum servico externo foi configurado."),
+        tags: ["ready", "external"]);
+}
+else
+{
+    foreach (var service in externalServices)
+    {
+        healthChecks.AddUrlGroup(
+            new Uri(service.Value!),
+            name: $"external-{service.Key}",
+            failureStatus: HealthStatus.Degraded,
+            tags: ["ready", "external"]);
+    }
 }
 
 if (!builder.Environment.IsEnvironment("Testing"))
@@ -171,6 +239,30 @@ app.MapHealthChecks("/health", new HealthCheckOptions
     ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
 });
 
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("live"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
+app.MapHealthChecks("/health/database", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("db"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
+app.MapHealthChecks("/health/external", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("external"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
 if (!app.Environment.IsEnvironment("Testing"))
 {
     app.MapHealthChecksUI(options =>
@@ -179,7 +271,27 @@ if (!app.Environment.IsEnvironment("Testing"))
     });
 }
 
+app.UseMiddleware<CorrelationAndMetricsMiddleware>();
+app.UseSerilogRequestLogging(options =>
+{
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        diagnosticContext.Set("CorrelationId", httpContext.Response.Headers["X-Correlation-ID"].ToString());
+        diagnosticContext.Set("TraceId", System.Diagnostics.Activity.Current?.TraceId.ToString());
+    };
+});
 app.UseRateLimiter();
+
+app.MapGet("/metrics", () => Results.Text(
+    Telemetry.ExportPrometheus(),
+    "text/plain; version=0.0.4; charset=utf-8"))
+    .WithTags("observability")
+    .ExcludeFromDescription();
+
+app.MapGet("/", () => "Olli API - Clyvo VET")
+    .WithTags("status")
+    .ExcludeFromDescription();
+app.MapControllers();
 
 if (app.Environment.IsDevelopment())
 {
@@ -187,6 +299,6 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
-app.RegistrarRotasOlli();
+app.Run();
 
 public partial class Program { }
