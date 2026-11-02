@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Olli.Api.Domain.Entities;
 using Olli.Api.Domain.Enums;
 
@@ -35,9 +36,19 @@ public class AlertaPreventivoDTO
     [property: Description("Recomendacao gerada pela IA da Olli")]
     public string? RecomendacaoIa { get; set; }
 
+    [JsonPropertyName("_links")]
+    public Dictionary<string, HateoasLink> Links { get; set; } = [];
+
     public AlertaPreventivoDTO() { }
 
-    public AlertaPreventivoDTO(AlertaPreventivo alerta) =>
+    public AlertaPreventivoDTO(AlertaPreventivo alerta)
+    {
         (Id, IdPet, Tipo, Titulo, Descricao, DataPrevista, Status, RecomendacaoIa) =
-        (alerta.Id, alerta.IdPet, alerta.Tipo, alerta.Titulo, alerta.Descricao, alerta.DataPrevista, alerta.Status, alerta.RecomendacaoIa);
+            (alerta.Id, alerta.IdPet, alerta.Tipo, alerta.Titulo, alerta.Descricao, alerta.DataPrevista, alerta.Status, alerta.RecomendacaoIa);
+        Links = new()
+        {
+            ["self"] = new($"/pets/{IdPet}/alertas/{Id}", "GET", "Consultar alerta"),
+            ["pet"] = new($"/pets/{IdPet}", "GET", "Consultar pet")
+        };
+    }
 }

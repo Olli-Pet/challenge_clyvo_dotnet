@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Olli.Api.Application.DTOs;
 using Olli.Api.Application.Services;
 using Olli.Api.Filters;
@@ -8,12 +9,24 @@ namespace Olli.Api.Controllers;
 [ApiController]
 [Route("tutores")]
 [Produces("application/json")]
+[Authorize]
 public sealed class TutoresController(ITutorService tutorService) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<List<TutorDTO>>(StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TutorDTO>>> Listar(CancellationToken cancellationToken) =>
-        Ok(await tutorService.ListarAsync(cancellationToken));
+    public async Task<ActionResult<IReadOnlyList<TutorDTO>>> Listar(
+        CancellationToken cancellationToken,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? nome = null,
+        [FromQuery] string? sort = null)
+    {
+        var safePage = Math.Max(1, page);
+        var safePageSize = Math.Clamp(pageSize, 1, 100);
+        Response.Headers["X-Page"] = safePage.ToString();
+        Response.Headers["X-Page-Size"] = safePageSize.ToString();
+        return Ok(await tutorService.ListarAsync(cancellationToken, safePage, safePageSize, nome, sort));
+    }
 
     [HttpGet("{id:int}")]
     [ProducesResponseType<TutorDTO>(StatusCodes.Status200OK)]

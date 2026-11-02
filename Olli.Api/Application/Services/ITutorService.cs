@@ -4,7 +4,7 @@ namespace Olli.Api.Application.Services;
 
 public interface ITutorService
 {
-    Task<IReadOnlyList<TutorDTO>> ListarAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<TutorDTO>> ListarAsync(CancellationToken cancellationToken, int page = 1, int pageSize = 50, string? nome = null, string? sort = null);
     Task<TutorDTO?> BuscarPorIdAsync(int id, CancellationToken cancellationToken);
     Task<TutorDTO> CriarAsync(TutorDTO dto, CancellationToken cancellationToken);
     Task<bool> AtualizarAsync(int id, TutorDTO dto, CancellationToken cancellationToken);

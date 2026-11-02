@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Olli.Api.Domain.Entities;
 using Olli.Api.Domain.Enums;
 
@@ -43,8 +44,21 @@ public class PetDTO
     [property: Description("Observacoes gerais sobre o pet")]
     public string? Observacoes { get; set; }
 
+    [JsonPropertyName("_links")]
+    public Dictionary<string, HateoasLink> Links { get; set; } = [];
+
     public PetDTO() { }
 
-    public PetDTO(Pet pet) => (Id, IdTutor, NomeTutor, Nome, Especie, Raca, DataNascimento, PesoKg, ScoreSaude, Observacoes) =
-        (pet.Id, pet.IdTutor, pet.Tutor?.Nome, pet.Nome, pet.Especie, pet.Raca, pet.DataNascimento, pet.PesoKg, pet.ScoreSaude, pet.Observacoes);
+    public PetDTO(Pet pet)
+    {
+        (Id, IdTutor, NomeTutor, Nome, Especie, Raca, DataNascimento, PesoKg, ScoreSaude, Observacoes) =
+            (pet.Id, pet.IdTutor, pet.Tutor?.Nome, pet.Nome, pet.Especie, pet.Raca, pet.DataNascimento, pet.PesoKg, pet.ScoreSaude, pet.Observacoes);
+        Links = new()
+        {
+            ["self"] = new($"/pets/{Id}", "GET", "Consultar pet"),
+            ["historico"] = new($"/pets/{Id}/historico", "GET", "Consultar histórico de saúde"),
+            ["alertas"] = new($"/pets/{Id}/alertas", "GET", "Consultar alertas preventivos"),
+            ["recomendacao"] = new($"/pets/{Id}/recomendacao-ia", "GET", "Consultar recomendação preventiva")
+        };
+    }
 }

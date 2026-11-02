@@ -14,7 +14,7 @@ API REST em ASP.NET Core para acompanhamento preventivo da saúde de pets. A Oll
 
 ## Entrega desta sprint
 
-Esta versão contempla monitoramento, observabilidade e testes automatizados:
+Esta versão contempla a consolidação da Sprint 4 e os itens das Sprints 1, 2 e 3:
 
 - health checks da API, do banco e de serviços externos;
 - logging estruturado com Serilog, em console e arquivo;
@@ -23,6 +23,11 @@ Esta versão contempla monitoramento, observabilidade e testes automatizados:
 - métricas de quantidade, erros e duração em formato Prometheus;
 - testes unitários com xUnit e Moq;
 - testes de integração HTTP com `WebApplicationFactory<Program>`;
+- autenticação e autorização com JWT, incluindo endpoint de emissão de token;
+- HATEOAS nas respostas de consulta, com links `_links` para os recursos relacionados;
+- padrão Repository com repositório EF Core concreto;
+- auditoria NoSQL opcional em MongoDB para recomendações preventivas;
+- middleware global de exceções com resposta `ProblemDetails` consistente;
 - documentação de execução local, Oracle, observabilidade e testes.
 
 #
@@ -31,7 +36,7 @@ Esta versão contempla monitoramento, observabilidade e testes automatizados:
 
 ## Tecnologias e estrutura
 
-O projeto usa C#/.NET 10, ASP.NET Core Controllers, Entity Framework Core, Oracle EF Core, EF Core InMemory, Scalar, Health Checks, Serilog, OpenTelemetry, rate limiting, idempotência, xUnit e Moq.
+O projeto usa C#/.NET 10, ASP.NET Core Controllers, Entity Framework Core, Oracle EF Core, EF Core InMemory, MongoDB.Driver, JWT Bearer, Scalar, Health Checks, Serilog, OpenTelemetry, rate limiting, idempotência, xUnit e Moq.
 
 ```text
 Olli.Api/Application          DTOs, mapeamentos e serviços
@@ -44,6 +49,22 @@ Olli.Api.Tests/Integration    testes de integração HTTP
 README.md                     documentação, execução e fluxo de apresentação
 ```
 
+### Arquitetura da solução
+
+```mermaid
+flowchart LR
+    C[Cliente HTTP] --> M[Middlewares: exceção, correlação e métricas]
+    M --> A[JWT Bearer / autorização]
+    A --> CT[Controllers]
+    CT --> S[Application Services]
+    S --> R[Repository EF Core]
+    R --> SQL[(Oracle ou InMemory)]
+    S --> NOSQL[(MongoDB opcional: auditoria NoSQL)]
+    M --> O[Serilog + OpenTelemetry + Prometheus]
+```
+
+Os endpoints de consulta retornam links `_links` em cada recurso, permitindo navegar para o próprio recurso e para histórico, alertas, recomendação e pet relacionado.
+
 ## Domínio e endpoints
 
 Entidades principais: `Tutor`, `Pet`, `EventoSaude` e `AlertaPreventivo`. A recomendação em `RecomendacaoIaDTO` é orientativa e simulada; não substitui avaliação veterinária.
@@ -55,13 +76,17 @@ Entidades principais: `Tutor`, `Pet`, `EventoSaude` e `AlertaPreventivo`. A reco
 | Histórico | `GET/POST /pets/{id}/historico`, `GET/PUT/DELETE /pets/{id}/historico/{idEvento}` |
 | Alertas | `GET/POST /pets/{id}/alertas`, `GET/PUT/DELETE /pets/{id}/alertas/{idAlerta}` |
 | IA simulada | `GET /pets/{id}/recomendacao-ia` |
+| Autenticação | `POST /auth/token` |
 
-Todas as rotas `POST` exigem o header `IdempotencyKey`. Status principais: `200 OK` (consulta), `201 Created` (criação), `204 No Content` (atualização/exclusão), `400 Bad Request` (dados inválidos ou idempotência ausente), `404 Not Found` e `429 Too Many Requests`.
+As consultas de tutores aceitam `page`, `pageSize`, `nome` e `sort=nome`. As consultas de pets aceitam `page`, `pageSize`, `idTutor`, `especie` e `sort=nome|score|nascimento`; `pageSize` é limitado a 100. As respostas informam `X-Page` e `X-Page-Size`.
+
+As rotas de domínio `POST` exigem o header `IdempotencyKey`; a emissão de token em `/auth/token` é a exceção. Fora do ambiente `Testing`, os controllers de domínio exigem JWT Bearer. Status principais: `200 OK` (consulta), `201 Created` (criação), `204 No Content` (atualização/exclusão), `400 Bad Request`, `401 Unauthorized`, `404 Not Found` e `429 Too Many Requests`.
 
 ## Pré-requisitos
 
 - SDK do .NET 10 instalado e disponível no `PATH` (`dotnet --version`);
 - acesso ao Oracle FIAP somente para executar a aplicação com o provider Oracle.
+- MongoDB é opcional; a aplicação funciona localmente com a auditoria NoSQL desabilitada.
 
 Na raiz da solução:
 
@@ -143,6 +168,8 @@ dotnet test
 ```
 
 Para a demonstração local, não é necessário Oracle. O ambiente Development utiliza o banco InMemory e o seed automático.
+
+Em Development, obtenha primeiro o JWT conforme a seção [Autenticação JWT](#autenticação-jwt) e use `-Headers $headers` em todas as chamadas aos endpoints de domínio. Os exemplos abaixo omitem esse parâmetro apenas para manter o fluxo legível.
 
 ### 2. Visão geral da arquitetura
 
@@ -466,6 +493,8 @@ Durante a integração, o ambiente `Testing` força InMemory, remove dependênci
 
 ### 12. Executar com Oracle
 
+Se o Oracle estiver instalado na própria máquina, a API também pode se conectar a ele. Nesse caso, use o `Data Source` correspondente ao service name local — por exemplo, `localhost:1521/XEPDB1` em instalações Oracle XE ou `localhost:1521/ORCL` quando esse for o serviço configurado.
+
 Pare a API local com `Ctrl+C` e configure a sessão do PowerShell:
 
 ```powershell
@@ -511,3 +540,42 @@ dotnet test --filter "Category=Oracle"
 ```
 
 Sem `ORACLE_TEST_CONNECTION_STRING`, esse teste é ignorado. Com a variável configurada, ele executa o health check real contra o Oracle.
+
+## Autenticação JWT
+
+Em Development, o usuário demonstrativo é `demo` e a senha é `olli123`, definidas apenas para facilitar a apresentação. Em qualquer ambiente real, altere `Jwt:Key` para um segredo de pelo menos 32 caracteres e não versionado.
+
+```powershell
+$tokenResponse = Invoke-RestMethod `
+    -Uri "$baseUrl/auth/token" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body (@{ username = "demo"; password = "olli123" } | ConvertTo-Json)
+
+$headers = @{ Authorization = "Bearer $($tokenResponse.accessToken)" }
+Invoke-RestMethod "$baseUrl/pets" -Headers $headers
+```
+
+O ambiente `Testing` registra um esquema de autenticação determinístico somente para que os testes HTTP não dependam de credenciais ou tokens externos.
+
+## Persistência NoSQL com MongoDB
+
+O provider relacional continua sendo Oracle (ou InMemory local) para o domínio transacional. Quando `MongoDb:Enabled=true`, cada recomendação de IA é registrada na coleção configurada em `MongoDb:AuditCollectionName`. A conexão é configurada por `MongoDb:ConnectionString` e o recurso é desabilitado por padrão para não exigir infraestrutura adicional durante a correção.
+
+## Cobertura de testes
+
+Além dos testes unitários de mapeamentos, controllers e serviços, a suíte cobre o fluxo HTTP e os endpoints de saúde, autenticação, HATEOAS, CRUD, idempotência, rate limiting e respostas de erro. A cobertura pode ser coletada e validada com threshold:
+
+```powershell
+dotnet test --collect:"XPlat Code Coverage"
+dotnet test .\Olli.Api.Tests\Olli.Api.Tests.csproj `
+  /p:CollectCoverage=true `
+  /p:CoverletOutputFormat=cobertura `
+  /p:CoverletOutput=TestResults/coverage-domain-app/ `
+  /p:Include="[Olli.Api]Olli.Api.Application.*%2c[Olli.Api]Olli.Api.Domain.*" `
+  /p:Threshold=70 /p:ThresholdType=line /p:ThresholdStat=total
+```
+
+O filtro acompanha a rubrica da Sprint 4 e mede as camadas de Domínio e Aplicação, sem misturar migrations, código gerado do OpenAPI e infraestrutura externa. A execução atual apresentou 97,10% de cobertura de linhas e 91,66% de branches nessas camadas.
+
+Os testes seguem AAA (Arrange, Act, Assert) e usam banco InMemory isolado por cenário. O teste Oracle é opt-in por `ORACLE_TEST_CONNECTION_STRING`; não é necessário para executar a suíte padrão.

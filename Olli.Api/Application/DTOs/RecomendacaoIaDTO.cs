@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Serialization;
 
 namespace Olli.Api.Application.DTOs;
 
@@ -22,4 +23,7 @@ public class RecomendacaoIaDTO
 
     [property: Description("Proximas acoes recomendadas para o tutor")]
     public List<string> ProximasAcoes { get; set; } = [];
+
+    [JsonPropertyName("_links")]
+    public Dictionary<string, HateoasLink> Links { get; set; } = [];
 }

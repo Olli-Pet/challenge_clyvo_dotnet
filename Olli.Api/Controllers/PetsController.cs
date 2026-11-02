@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Olli.Api.Application.DTOs;
 using Olli.Api.Application.Services;
 using Olli.Api.Filters;
@@ -8,11 +9,24 @@ namespace Olli.Api.Controllers;
 [ApiController]
 [Route("pets")]
 [Produces("application/json")]
+[Authorize]
 public sealed class PetsController(IPetService petService) : ControllerBase
 {
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<PetDTO>>> Listar(CancellationToken cancellationToken) =>
-        Ok(await petService.ListarAsync(cancellationToken));
+    public async Task<ActionResult<IReadOnlyList<PetDTO>>> Listar(
+        CancellationToken cancellationToken,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] int? idTutor = null,
+        [FromQuery] string? especie = null,
+        [FromQuery] string? sort = null)
+    {
+        var safePage = Math.Max(1, page);
+        var safePageSize = Math.Clamp(pageSize, 1, 100);
+        Response.Headers["X-Page"] = safePage.ToString();
+        Response.Headers["X-Page-Size"] = safePageSize.ToString();
+        return Ok(await petService.ListarAsync(cancellationToken, safePage, safePageSize, idTutor, especie, sort));
+    }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<PetDTO>> BuscarPorId(int id, CancellationToken cancellationToken)

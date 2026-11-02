@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Olli.Api.Domain.Entities;
 using Olli.Api.Domain.Enums;
 
@@ -38,10 +39,20 @@ public class EventoSaudeDTO
     [property: Description("Data sugerida para retorno")]
     public DateTime? DataRetornoSugerida { get; set; }
 
+    [JsonPropertyName("_links")]
+    public Dictionary<string, HateoasLink> Links { get; set; } = [];
+
     public EventoSaudeDTO() { }
 
-    public EventoSaudeDTO(EventoSaude eventoSaude) =>
+    public EventoSaudeDTO(EventoSaude eventoSaude)
+    {
         (Id, IdPet, Tipo, Titulo, Descricao, DataEvento, NomeVeterinario, PrecisaRetorno, DataRetornoSugerida) =
-        (eventoSaude.Id, eventoSaude.IdPet, eventoSaude.Tipo, eventoSaude.Titulo, eventoSaude.Descricao,
-            eventoSaude.DataEvento, eventoSaude.NomeVeterinario, eventoSaude.PrecisaRetorno, eventoSaude.DataRetornoSugerida);
+            (eventoSaude.Id, eventoSaude.IdPet, eventoSaude.Tipo, eventoSaude.Titulo, eventoSaude.Descricao,
+                eventoSaude.DataEvento, eventoSaude.NomeVeterinario, eventoSaude.PrecisaRetorno, eventoSaude.DataRetornoSugerida);
+        Links = new()
+        {
+            ["self"] = new($"/pets/{IdPet}/historico/{Id}", "GET", "Consultar evento"),
+            ["pet"] = new($"/pets/{IdPet}", "GET", "Consultar pet")
+        };
+    }
 }

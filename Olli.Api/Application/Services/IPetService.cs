@@ -4,7 +4,7 @@ namespace Olli.Api.Application.Services;
 
 public interface IPetService
 {
-    Task<IReadOnlyList<PetDTO>> ListarAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<PetDTO>> ListarAsync(CancellationToken cancellationToken, int page = 1, int pageSize = 50, int? idTutor = null, string? especie = null, string? sort = null);
     Task<PetDTO?> BuscarPorIdAsync(int id, CancellationToken cancellationToken);
     Task<PetDTO?> CriarAsync(PetDTO dto, CancellationToken cancellationToken);
     Task<bool> AtualizarAsync(int id, PetDTO dto, CancellationToken cancellationToken);

@@ -1,4 +1,7 @@
 using System.Threading.RateLimiting;
+using System.Text;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using HealthChecks.UI.Client;
 using IdempotentAPI.Cache.DistributedCache.Extensions.DependencyInjection;
 using IdempotentAPI.Core;
@@ -8,11 +11,16 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
+using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Olli.Api.Application.Services;
 using Olli.Api.Infrastructure.Observability;
+using Olli.Api.Infrastructure.Middleware;
 using Olli.Api.Infrastructure.Persistence;
+using Olli.Api.Infrastructure.Security;
+using Olli.Api.Application.Repositories;
+using Olli.Api.Domain.Entities;
 using Scalar.AspNetCore;
 using Serilog;
 using Serilog.Events;
@@ -41,6 +49,40 @@ builder.Services.AddOpenTelemetry()
         .AddConsoleExporter());
 
 builder.Services.AddControllers();
+
+#region Authentication and authorization
+builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
+if (!builder.Environment.IsEnvironment("Testing") && Encoding.UTF8.GetByteCount(jwtOptions.Key) < 32)
+{
+    throw new InvalidOperationException("Jwt:Key deve possuir pelo menos 32 caracteres fora do ambiente de testes.");
+}
+
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddAuthentication("Testing")
+        .AddScheme<AuthenticationSchemeOptions, TestingAuthenticationHandler>("Testing", _ => { });
+}
+else
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = jwtOptions.Issuer,
+                ValidateAudience = true,
+                ValidAudience = jwtOptions.Audience,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Key)),
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromSeconds(30)
+            };
+        });
+}
+builder.Services.AddAuthorization();
+#endregion
 
 #region Database
 var databaseProvider = builder.Configuration.GetValue<string>("DatabaseProvider") ?? "InMemory";
@@ -76,8 +118,29 @@ builder.Services.AddDbContext<OlliDb>(
         options.UseInMemoryDatabase(databaseName);
     });
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
-builder.Services.AddScoped<ITutorService, TutorService>();
-builder.Services.AddScoped<IPetService, PetService>();
+builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
+// Os serviços possuem construtores auxiliares usados pelos testes. O registro por
+// fábrica evita ambiguidade no container padrão de injeção de dependências.
+builder.Services.AddScoped<ITutorService>(serviceProvider =>
+    new TutorService(
+        serviceProvider.GetRequiredService<IRepository<Tutor>>()));
+builder.Services.AddScoped<IPetService>(serviceProvider =>
+    new PetService(
+        serviceProvider.GetRequiredService<IRepository<Pet>>(),
+        serviceProvider.GetRequiredService<IRepository<Tutor>>(),
+        serviceProvider.GetRequiredService<IRepository<EventoSaude>>(),
+        serviceProvider.GetRequiredService<IRepository<AlertaPreventivo>>(),
+        serviceProvider.GetRequiredService<IRecommendationAuditRepository>(),
+        serviceProvider.GetRequiredService<ILogger<PetService>>()));
+builder.Services.Configure<MongoDbOptions>(builder.Configuration.GetSection("MongoDb"));
+if (builder.Configuration.GetValue<bool>("MongoDb:Enabled"))
+{
+    builder.Services.AddSingleton<IRecommendationAuditRepository, MongoRecommendationAuditRepository>();
+}
+else
+{
+    builder.Services.AddSingleton<IRecommendationAuditRepository, NullRecommendationAuditRepository>();
+}
 #endregion
 
 #region Idempotency
@@ -212,12 +275,23 @@ builder.Services.AddOpenApi(options =>
                 Url = new Uri("https://www.fiap.com.br")
             }
         };
+        var components = document.Components ??= new OpenApiComponents();
+        components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            Description = "Informe o token emitido por POST /auth/token no formato: Bearer {token}."
+        };
         return Task.CompletedTask;
     });
 });
 #endregion
 
 var app = builder.Build();
+
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -277,10 +351,12 @@ app.UseSerilogRequestLogging(options =>
     options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
     {
         diagnosticContext.Set("CorrelationId", httpContext.Response.Headers["X-Correlation-ID"].ToString());
-        diagnosticContext.Set("TraceId", System.Diagnostics.Activity.Current?.TraceId.ToString());
+        diagnosticContext.Set("TraceId", System.Diagnostics.Activity.Current?.TraceId.ToString() ?? string.Empty);
     };
 });
 app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/metrics", () => Results.Text(
     Telemetry.ExportPrometheus(),

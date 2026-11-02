@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Olli.Api.Domain.Entities;
 
 namespace Olli.Api.Application.DTOs;
@@ -29,8 +30,19 @@ public class TutorDTO
     [property: Description("Quantidade de pets vinculados ao tutor")]
     public int QuantidadePets { get; set; }
 
+    [JsonPropertyName("_links")]
+    public Dictionary<string, HateoasLink> Links { get; set; } = [];
+
     public TutorDTO() { }
 
-    public TutorDTO(Tutor tutor) => (Id, Nome, Email, Telefone, QuantidadePets) =
-        (tutor.Id, tutor.Nome, tutor.Email, tutor.Telefone, tutor.Pets.Count);
+    public TutorDTO(Tutor tutor)
+    {
+        (Id, Nome, Email, Telefone, QuantidadePets) =
+            (tutor.Id, tutor.Nome, tutor.Email, tutor.Telefone, tutor.Pets.Count);
+        Links = new()
+        {
+            ["self"] = new($"/tutores/{Id}", "GET", "Consultar tutor"),
+            ["pets"] = new("/pets", "GET", "Consultar pets")
+        };
+    }
 }
